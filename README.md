@@ -1,6 +1,8 @@
 # RLM MCP Server
 
-MCP (Model Context Protocol) server for [RLM (Recursive Language Models)](https://github.com/alexzhang13/rlm).
+MCP (Model Context Protocol) server wrapper for [RLM (Recursive Language Models)](https://github.com/alexzhang13/rlm).
+
+> **Note:** This is an MCP interface for the RLM library. The core RLM implementation is by **Alex Zhang, Tim Kraska, and Omar Khattab** at MIT CSAIL. See [Acknowledgments](#acknowledgments) for full credits.
 
 RLM enables verified code execution with LLM reasoning - it writes and executes Python code iteratively until producing a verified answer.
 
@@ -98,6 +100,26 @@ mcporter call 'rlm.rlm_status()'
 ## Security Notice
 
 RLM executes arbitrary Python code by design. Only use with trusted inputs. The code runs in a local Python environment without additional sandboxing.
+
+## Acknowledgments
+
+This MCP server is a wrapper for the **Recursive Language Models (RLM)** library developed by:
+
+- **Alex L. Zhang** (MIT CSAIL)
+- **Tim Kraska** (MIT CSAIL)
+- **Omar Khattab** (MIT CSAIL)
+
+The RLM concept and implementation are their original work. This repository only provides an MCP interface to make RLM accessible via the Model Context Protocol.
+
+**Citation:**
+```bibtex
+@article{zhang2025rlm,
+  title={Recursive Language Models},
+  author={Zhang, Alex L. and Kraska, Tim and Khattab, Omar},
+  journal={arXiv preprint arXiv:2512.24601},
+  year={2025}
+}
+```
 
 ## References
 
