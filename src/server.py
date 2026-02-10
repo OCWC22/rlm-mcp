@@ -10,15 +10,31 @@ Provides RLM (Recursive Language Model) capabilities:
 No external dependencies (no Qdrant, no PDF-RAG).
 
 Usage:
-    export OPENROUTER_API_KEY=your_key
+    # API keys are automatically loaded from .env.local
+    # Or set manually:
+    export OPENAI_API_KEY=your_key
+    export ANTHROPIC_API_KEY=your_key
     python -m src.server
 """
 
 import os
 import logging
 from typing import Optional
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
+
+# Load environment variables from .env.local if it exists
+env_local_path = Path(__file__).parent.parent.parent / ".env.local"
+if env_local_path.exists():
+    with open(env_local_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                key, value = line.split('=', 1)
+                # Remove quotes if present
+                value = value.strip('"\'')
+                os.environ[key] = value
 
 # Lazy import RLM
 _rlm_instance = None
@@ -27,9 +43,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
-RLM_MODEL = os.getenv("RLM_MODEL", "openrouter/x-ai/grok-code-fast-1")
-RLM_SUBTASK_MODEL = os.getenv("RLM_SUBTASK_MODEL", "openrouter/openai/gpt-4o-mini")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+RLM_MODEL = os.getenv("RLM_MODEL", "openai/gpt-5.2-2025-12-11")
+RLM_SUBTASK_MODEL = os.getenv("RLM_SUBTASK_MODEL", "anthropic/claude-opus-4-6")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 RLM_MAX_DEPTH = int(os.getenv("RLM_MAX_DEPTH", "2"))
 RLM_MAX_ITERATIONS = int(os.getenv("RLM_MAX_ITERATIONS", "20"))
 
@@ -47,8 +64,8 @@ def get_rlm():
     - logger: Saves trajectories for visualization
 
     Cost optimization:
-    - Root task: grok-code-fast-1 (powerful, handles decomposition)
-    - Subtasks: gpt-4o-mini (cheap, handles individual work)
+    - Root task: openai/gpt-5.2-2025-12-11 (powerful, handles decomposition)
+    - Subtasks: anthropic/claude-opus-4-6 (high-quality, handles individual work)
     """
     global _rlm_instance
     if _rlm_instance is None:
@@ -64,11 +81,26 @@ def get_rlm():
         logger.info(f"Max depth: {RLM_MAX_DEPTH}, Max iterations: {RLM_MAX_ITERATIONS}")
         logger.info(f"Logging trajectories to: {log_dir}")
 
+        # Configure API keys based on model provider
+        if RLM_MODEL.startswith("openai/"):
+            api_key = OPENAI_API_KEY
+        elif RLM_MODEL.startswith("anthropic/"):
+            api_key = ANTHROPIC_API_KEY
+        else:
+            api_key = OPENAI_API_KEY  # default to OpenAI
+        
+        if RLM_SUBTASK_MODEL.startswith("openai/"):
+            subtask_api_key = OPENAI_API_KEY
+        elif RLM_SUBTASK_MODEL.startswith("anthropic/"):
+            subtask_api_key = ANTHROPIC_API_KEY
+        else:
+            subtask_api_key = OPENAI_API_KEY  # default to OpenAI
+
         _rlm_instance = RLM(
             backend="litellm",
             backend_kwargs={
                 "model_name": RLM_MODEL,
-                "api_key": OPENROUTER_API_KEY,
+                "api_key": api_key,
             },
             environment="local",
             max_depth=RLM_MAX_DEPTH,
@@ -80,7 +112,7 @@ def get_rlm():
             other_backends=["litellm"],
             other_backend_kwargs=[{
                 "model_name": RLM_SUBTASK_MODEL,
-                "api_key": OPENROUTER_API_KEY,
+                "api_key": subtask_api_key,
             }],
         )
     return _rlm_instance
@@ -319,7 +351,9 @@ def rlm_status() -> str:
 
 **Log Directory:** {os.getenv("RLM_LOG_DIR", "~/.rlm/logs")}
 
-**API Key:** {"Set" if OPENROUTER_API_KEY else "NOT SET"}
+**API Keys:** 
+- OpenAI: {"Set" if OPENAI_API_KEY else "NOT SET"}
+- Anthropic: {"Set" if ANTHROPIC_API_KEY else "NOT SET"}
 """
 
 
