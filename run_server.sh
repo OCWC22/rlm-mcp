@@ -20,8 +20,8 @@ elif [ -d "$HOME/rlm" ]; then
 fi
 
 # Default config (can be overridden)
-export RLM_MODEL="${RLM_MODEL:-openrouter/x-ai/grok-code-fast-1}"
-export RLM_SUBTASK_MODEL="${RLM_SUBTASK_MODEL:-openrouter/openai/gpt-4o-mini}"
+export RLM_MODEL="${RLM_MODEL:-openai/gpt-5.2-2025-12-11}"
+export RLM_SUBTASK_MODEL="${RLM_SUBTASK_MODEL:-anthropic/claude-opus-4-6}"
 export RLM_MAX_DEPTH="${RLM_MAX_DEPTH:-2}"
 export RLM_MAX_ITERATIONS="${RLM_MAX_ITERATIONS:-20}"
 
