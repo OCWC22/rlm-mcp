@@ -13,6 +13,7 @@ dependencies = [
     "mcp>=1.0.0",
     "litellm>=1.55.0",
     "daytona>=0.10.0",
+    "uvicorn>=0.29.0",
 ]
 
 [project.scripts]

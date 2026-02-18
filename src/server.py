@@ -55,11 +55,13 @@ DAYTONA_API_URL = os.getenv("DAYTONA_API_URL", "https://app.daytona.io/api")
 DAYTONA_TARGET = os.getenv("DAYTONA_TARGET", "us")
 RLM_MAX_ITERATIONS = int(os.getenv("RLM_MAX_ITERATIONS", "15"))
 RLM_MAX_OUTPUT_CHARS = int(os.getenv("RLM_MAX_OUTPUT_CHARS", "10000"))
+MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "stdio")  # "stdio" | "streamable-http" | "sse"
+MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
 
 # ---------------------------------------------------------------------------
 # MCP Server
 # ---------------------------------------------------------------------------
-mcp = FastMCP("fleet-rlm-daytona")
+mcp = FastMCP("fleet-rlm-daytona", host="0.0.0.0", port=MCP_PORT)
 
 # ---------------------------------------------------------------------------
 # Interpreter lifecycle — shared per server process
@@ -488,7 +490,8 @@ def main():
     logger.info(f"Root Model: {RLM_MODEL}")
     logger.info(f"Subtask Model: {RLM_SUBTASK_MODEL}")
     logger.info(f"Daytona Target: {DAYTONA_TARGET}")
-    mcp.run()
+    logger.info(f"Transport: {MCP_TRANSPORT} (port {MCP_PORT})")
+    mcp.run(transport=MCP_TRANSPORT)
 
 
 if __name__ == "__main__":

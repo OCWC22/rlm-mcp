@@ -49,20 +49,20 @@ git clone https://github.com/OCWC22/rlm-mcp.git
 cd rlm-mcp
 
 # Setup
+cp .env.example .env.local
+# Edit .env.local — add your keys
+
 chmod +x setup.sh run_server.sh
 ./setup.sh
+```
 
-# Configure (create .env.local or export)
-export DAYTONA_API_KEY="your-daytona-key"
-export OPENAI_API_KEY="your-openai-key"
+### Option A: Run locally (stdio, for Claude Desktop / CLI)
 
-# Run
+```bash
 ./run_server.sh
 ```
 
-## Configuration
-
-Add to your MCP client config (`~/.mcp.json` or Claude Desktop settings):
+MCP client config (`~/.mcp.json`):
 
 ```json
 {
@@ -79,6 +79,31 @@ Add to your MCP client config (`~/.mcp.json` or Claude Desktop settings):
 }
 ```
 
+### Option B: Run locally over HTTP (for remote clients)
+
+```bash
+./run_server.sh --http
+# Server starts on http://0.0.0.0:8000/mcp
+```
+
+Connect from Claude CLI:
+
+```bash
+claude mcp add fleet-rlm --transport http http://your-ip:8000/mcp
+```
+
+### Option C: Deploy to Daytona (always-on, connect from anywhere)
+
+```bash
+./run_server.sh --deploy
+```
+
+This creates a Daytona workspace, uploads the server, installs deps, and starts it on HTTP. The server runs remotely — you just connect to it.
+
+```bash
+claude mcp add fleet-rlm --transport http https://<sandbox-url>/mcp
+```
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -91,6 +116,8 @@ Add to your MCP client config (`~/.mcp.json` or Claude Desktop settings):
 | `RLM_MAX_ITERATIONS` | `15` | Max iterations per RLM loop |
 | `DAYTONA_API_URL` | `https://app.daytona.io/api` | Daytona API endpoint |
 | `DAYTONA_TARGET` | `us` | Daytona region (us, eu, asia) |
+| `MCP_TRANSPORT` | `stdio` | `stdio`, `streamable-http`, or `sse` |
+| `MCP_PORT` | `8000` | HTTP port (when using streamable-http) |
 
 *One of OPENAI_API_KEY or ANTHROPIC_API_KEY is required.
 
@@ -129,16 +156,13 @@ result = some_computation()
 SUBMIT(answer=result)
 ```
 
-## Comparison: Modal vs Daytona
+## Three Ways to Run
 
-| Aspect | Modal (fleet-rlm) | Daytona (this) |
-|--------|-------------------|----------------|
-| Setup | `modal setup` + secrets | API key only |
-| Sandbox creation | ~2-5s | ~90ms |
-| Persistence | Modal Volumes | Sandbox filesystem |
-| Protocol | JSON-line over stdin/stdout | SDK API calls |
-| Self-host | No | Yes (open source) |
-| Free tier | Limited | $200 free compute |
+| Mode | Command | Transport | Use case |
+|------|---------|-----------|----------|
+| Local stdio | `./run_server.sh` | stdio | Claude Desktop, local CLI |
+| Local HTTP | `./run_server.sh --http` | streamable-http | Remote clients on same network |
+| Daytona deploy | `./run_server.sh --deploy` | streamable-http | Always-on, connect from anywhere |
 
 ## Acknowledgments
 
