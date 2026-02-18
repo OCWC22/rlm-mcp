@@ -71,7 +71,7 @@ def get_interpreter():
     """Lazy-create a DaytonaInterpreter that lives for the server's lifetime."""
     global _interpreter
     if _interpreter is None:
-        from src.daytona_interpreter import DaytonaInterpreter
+        from .daytona_interpreter import DaytonaInterpreter
 
         _interpreter = DaytonaInterpreter(
             api_key=DAYTONA_API_KEY,

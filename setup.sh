@@ -19,7 +19,7 @@ echo "Installing dependencies..."
 "$VENV_DIR/bin/pip" install --quiet -r "$SCRIPT_DIR/requirements.txt"
 
 # Verify Daytona SDK installed
-if "$VENV_DIR/bin/python" -c "import daytona_sdk" 2>/dev/null; then
+if "$VENV_DIR/bin/python" -c "import daytona" 2>/dev/null; then
     echo "Daytona SDK: OK"
 else
     echo "WARNING: daytona-sdk not installed properly. Try:"

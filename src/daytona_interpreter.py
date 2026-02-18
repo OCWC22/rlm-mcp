@@ -12,7 +12,7 @@ import logging
 import time
 from typing import Any, Optional, Callable
 
-from daytona_sdk import Daytona, DaytonaConfig, CreateSandboxFromSnapshotParams
+from daytona import Daytona, DaytonaConfig, CreateSandboxFromSnapshotParams
 
 logger = logging.getLogger(__name__)
 

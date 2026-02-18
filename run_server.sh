@@ -29,4 +29,4 @@ if [ -z "$DAYTONA_API_KEY" ]; then
     fi
 fi
 
-exec "$VENV_PYTHON" -m src.server
+exec "$VENV_PYTHON" -m src
