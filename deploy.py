@@ -120,11 +120,11 @@ def main():
     # Start the MCP server in a background session
     print(f"\nStarting MCP server (port {MCP_PORT})...")
     session_id = "fleet-rlm-mcp"
-    sandbox.process.create_session(session_id=session_id)
+    sandbox.process.create_session(session_id)
     from daytona import SessionExecuteRequest
-    sandbox.process.session_execute(
+    sandbox.process.execute_session_command(
         session_id=session_id,
-        request=SessionExecuteRequest(
+        req=SessionExecuteRequest(
             command=f"cd {base} && python -m src",
             run_async=True,
         ),
