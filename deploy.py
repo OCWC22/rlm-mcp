@@ -144,7 +144,7 @@ def main():
     print(f"\nTo connect from Claude CLI:")
     print(f'  claude mcp add fleet-rlm --transport http "<sandbox-url>:{MCP_PORT}/mcp"')
     print(f"\nTo stop:")
-    print(f"  python -c \"from daytona import Daytona, DaytonaConfig; d=Daytona(DaytonaConfig(api_key='{DAYTONA_API_KEY[:8]}...')); d.delete(d.get('{sandbox.id}'))\"")
+    print(f"  python -c \"from daytona import Daytona, DaytonaConfig; import os; d=Daytona(DaytonaConfig(api_key=os.environ['DAYTONA_API_KEY'])); d.delete(d.get('{sandbox.id}'))\"")
     print(f"\nOr just let it auto-archive after it's idle.")
     print(f"\nSandbox env vars forwarded: {', '.join(k for k in FORWARD_KEYS if os.environ.get(k))}")
 
