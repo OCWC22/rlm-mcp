@@ -1,6 +1,6 @@
 #!/bin/bash
-# RLM MCP Server Launcher
-# Pure code execution with LLM - no Qdrant dependency
+# Fleet RLM MCP Server Launcher (Daytona Edition)
+# Code execution via Daytona sandboxes — no Modal, no local sandbox
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -12,17 +12,21 @@ if [ ! -f "$VENV_PYTHON" ]; then
     "$SCRIPT_DIR/setup.sh" >&2
 fi
 
-# RLM library path (optional - only needed if RLM not installed via pip)
-if [ -n "$RLM_LIB_PATH" ]; then
-    export PYTHONPATH="$RLM_LIB_PATH:$PYTHONPATH"
-elif [ -d "$HOME/rlm" ]; then
-    export PYTHONPATH="$HOME/rlm:$PYTHONPATH"
-fi
+# Default config (can be overridden via env or .env.local)
+export RLM_MODEL="${RLM_MODEL:-openai/gpt-4o}"
+export RLM_SUBTASK_MODEL="${RLM_SUBTASK_MODEL:-openai/gpt-4o-mini}"
+export RLM_MAX_ITERATIONS="${RLM_MAX_ITERATIONS:-15}"
+export DAYTONA_TARGET="${DAYTONA_TARGET:-us}"
 
-# Default config (can be overridden)
-export RLM_MODEL="${RLM_MODEL:-openai/gpt-5.2-2025-12-11}"
-export RLM_SUBTASK_MODEL="${RLM_SUBTASK_MODEL:-anthropic/claude-opus-4-6}"
-export RLM_MAX_DEPTH="${RLM_MAX_DEPTH:-2}"
-export RLM_MAX_ITERATIONS="${RLM_MAX_ITERATIONS:-20}"
+# Validate Daytona key
+if [ -z "$DAYTONA_API_KEY" ]; then
+    # Try loading from .env.local
+    if [ -f "$SCRIPT_DIR/.env.local" ]; then
+        export $(grep -v '^#' "$SCRIPT_DIR/.env.local" | xargs)
+    fi
+    if [ -z "$DAYTONA_API_KEY" ]; then
+        echo "WARNING: DAYTONA_API_KEY not set. Sandbox creation will fail." >&2
+    fi
+fi
 
 exec "$VENV_PYTHON" -m src.server
