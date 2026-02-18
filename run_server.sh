@@ -1,6 +1,10 @@
 #!/bin/bash
-# RLM MCP Server Launcher
-# Pure code execution with LLM - no Qdrant dependency
+# Fleet RLM MCP Server Launcher (Daytona Edition)
+#
+# Usage:
+#   ./run_server.sh              # local stdio (for Claude Desktop / CLI)
+#   ./run_server.sh --http       # HTTP on port 8000 (for remote access)
+#   ./run_server.sh --deploy     # deploy to Daytona workspace
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -12,17 +16,40 @@ if [ ! -f "$VENV_PYTHON" ]; then
     "$SCRIPT_DIR/setup.sh" >&2
 fi
 
-# RLM library path (optional - only needed if RLM not installed via pip)
-if [ -n "$RLM_LIB_PATH" ]; then
-    export PYTHONPATH="$RLM_LIB_PATH:$PYTHONPATH"
-elif [ -d "$HOME/rlm" ]; then
-    export PYTHONPATH="$HOME/rlm:$PYTHONPATH"
+# Default config (can be overridden via env or .env.local)
+export RLM_MODEL="${RLM_MODEL:-openai/gpt-4o}"
+export RLM_SUBTASK_MODEL="${RLM_SUBTASK_MODEL:-openai/gpt-4o-mini}"
+export RLM_MAX_ITERATIONS="${RLM_MAX_ITERATIONS:-15}"
+export DAYTONA_TARGET="${DAYTONA_TARGET:-us}"
+
+# Load .env.local if keys aren't set
+if [ -z "$DAYTONA_API_KEY" ] || [ -z "$OPENAI_API_KEY" ]; then
+    if [ -f "$SCRIPT_DIR/.env.local" ]; then
+        set -a
+        . "$SCRIPT_DIR/.env.local"
+        set +a
+    fi
 fi
 
-# Default config (can be overridden)
-export RLM_MODEL="${RLM_MODEL:-openai/gpt-5.2-2025-12-11}"
-export RLM_SUBTASK_MODEL="${RLM_SUBTASK_MODEL:-anthropic/claude-opus-4-6}"
-export RLM_MAX_DEPTH="${RLM_MAX_DEPTH:-2}"
-export RLM_MAX_ITERATIONS="${RLM_MAX_ITERATIONS:-20}"
+if [ -z "$DAYTONA_API_KEY" ]; then
+    echo "WARNING: DAYTONA_API_KEY not set. Sandbox creation will fail." >&2
+fi
 
-exec "$VENV_PYTHON" -m src.server
+# Parse mode
+case "${1:-}" in
+    --http)
+        export MCP_TRANSPORT="streamable-http"
+        export MCP_PORT="${MCP_PORT:-8000}"
+        echo "Starting Fleet RLM MCP on http://0.0.0.0:${MCP_PORT}/mcp" >&2
+        exec "$VENV_PYTHON" -m src
+        ;;
+    --deploy)
+        echo "Deploying to Daytona..." >&2
+        exec "$VENV_PYTHON" "$SCRIPT_DIR/deploy.py"
+        ;;
+    *)
+        # Default: stdio transport (for local MCP hosts)
+        export MCP_TRANSPORT="stdio"
+        exec "$VENV_PYTHON" -m src
+        ;;
+esac

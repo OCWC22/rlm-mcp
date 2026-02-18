@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "fleet-rlm-mcp"
+version = "0.1.0"
+description = "Fleet RLM MCP Server — Daytona Edition"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0.0",
+    "litellm>=1.55.0",
+    "daytona>=0.10.0",
+    "uvicorn>=0.29.0",
+]
+
+[project.scripts]
+fleet-rlm-mcp = "src.server:main"
+
+[tool.setuptools.packages.find]
+include = ["src*"]

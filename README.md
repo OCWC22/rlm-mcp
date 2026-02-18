@@ -1,133 +1,176 @@
-# RLM MCP Server
+# Fleet RLM MCP Server — Daytona Edition
 
-MCP (Model Context Protocol) server wrapper for [RLM (Recursive Language Models)](https://github.com/alexzhang13/rlm).
+MCP server that provides [RLM (Recursive Language Model)](https://arxiv.org/abs/2512.24601) capabilities with **Daytona** sandboxes for secure, remote code execution.
 
-> **Note:** This is an MCP interface for the RLM library. The core RLM implementation is by **Alex Zhang, Tim Kraska, and Omar Khattab** at MIT CSAIL. See [Acknowledgments](#acknowledgments) for full credits.
+> **Architecture:** LLM writes Python code → executes in Daytona sandbox → inspects output → iterates → returns verified answer. No local code execution, no Modal dependency.
 
-RLM enables verified code execution with LLM reasoning - it writes and executes Python code iteratively until producing a verified answer.
+Based on the [Fleet RLM](https://github.com/Qredence/fleet-rlm) patterns by Qredence, with Daytona replacing Modal for sandboxed execution.
 
 ## Features
 
-- **rlm_execute** - Execute tasks with Python code and LLM reasoning
-- **rlm_analyze** - Analyze data with code execution
-- **rlm_code** - Generate and test code
-- **rlm_decompose** - Break complex tasks into subtasks
-- **rlm_status** - Check system status
+| Tool | Description |
+|------|-------------|
+| `rlm_execute` | Execute tasks with iterative code execution (full RLM loop) |
+| `rlm_analyze` | Analyze data with code execution |
+| `rlm_code` | Generate, test, and fix code |
+| `rlm_decompose` | Break complex tasks into subtasks and solve each |
+| `sandbox_exec` | Execute Python code directly in sandbox (no RLM loop) |
+| `sandbox_upload` | Upload files to the sandbox |
+| `sandbox_files` | List files in the sandbox |
+| `rlm_status` | Check system status |
+
+## How It Works
+
+```
+┌─────────────┐     ┌──────────┐     ┌──────────────────┐
+│  MCP Client │────▶│ RLM Loop │────▶│ Daytona Sandbox  │
+│ (Claude, etc)│     │          │     │ (secure Python)  │
+└─────────────┘     │ 1. LLM   │     │                  │
+                    │    writes │     │ numpy, pandas,   │
+                    │    code   │     │ requests, etc.   │
+                    │ 2. Execute│────▶│                  │
+                    │ 3. Read   │◀────│ stdout/stderr    │
+                    │    output │     │                  │
+                    │ 4. Repeat │     │ SUBMIT() → done  │
+                    └──────────┘     └──────────────────┘
+```
 
 ## Prerequisites
 
-1. **RLM Library**
-   ```bash
-   git clone https://github.com/alexzhang13/rlm.git $HOME/rlm
-   cd $HOME/rlm
-   pip install -e .
-   ```
+1. **Daytona API Key** — get one from [app.daytona.io](https://app.daytona.io)
+2. **LLM API Key** — OpenAI or Anthropic
+3. **Python 3.10+**
 
-2. **OpenRouter API Key**
-   ```bash
-   export OPENROUTER_API_KEY="your-key-here"
-   ```
-
-## Installation
+## Quick Start
 
 ```bash
-# Create MCP server directory
-mkdir -p $HOME/.claude/mcp-servers/rlm
-
-# Download files
-curl -o $HOME/.claude/mcp-servers/rlm/src/server.py \
-  https://raw.githubusercontent.com/eesb99/rlm-mcp/main/src/server.py
-curl -o $HOME/.claude/mcp-servers/rlm/run_server.sh \
-  https://raw.githubusercontent.com/eesb99/rlm-mcp/main/run_server.sh
-curl -o $HOME/.claude/mcp-servers/rlm/setup.sh \
-  https://raw.githubusercontent.com/eesb99/rlm-mcp/main/setup.sh
-curl -o $HOME/.claude/mcp-servers/rlm/requirements.txt \
-  https://raw.githubusercontent.com/eesb99/rlm-mcp/main/requirements.txt
+# Clone
+git clone https://github.com/OCWC22/rlm-mcp.git
+cd rlm-mcp
 
 # Setup
-chmod +x $HOME/.claude/mcp-servers/rlm/*.sh
-$HOME/.claude/mcp-servers/rlm/setup.sh
+cp .env.example .env.local
+# Edit .env.local — add your keys
+
+chmod +x setup.sh run_server.sh
+./setup.sh
 ```
 
-## Configuration
+### Option A: Run locally (stdio, for Claude Desktop / CLI)
 
-Add to `$HOME/.mcp.json`:
+```bash
+./run_server.sh
+```
+
+MCP client config (`~/.mcp.json`):
 
 ```json
 {
   "mcpServers": {
-    "rlm": {
+    "fleet-rlm": {
       "command": "bash",
-      "args": ["/YOUR/HOME/PATH/.claude/mcp-servers/rlm/run_server.sh"]
+      "args": ["/path/to/rlm-mcp/run_server.sh"],
+      "env": {
+        "DAYTONA_API_KEY": "your-daytona-key",
+        "OPENAI_API_KEY": "your-openai-key"
+      }
     }
   }
 }
 ```
 
-Replace `/YOUR/HOME/PATH` with your actual home directory (run `echo $HOME` to find it).
+### Option B: Run locally over HTTP (for remote clients)
+
+```bash
+./run_server.sh --http
+# Server starts on http://0.0.0.0:8000/mcp
+```
+
+Connect from Claude CLI:
+
+```bash
+claude mcp add fleet-rlm --transport http http://your-ip:8000/mcp
+```
+
+### Option C: Deploy to Daytona (always-on, connect from anywhere)
+
+```bash
+./run_server.sh --deploy
+```
+
+This creates a Daytona workspace, uploads the server, installs deps, and starts it on HTTP. The server runs remotely — you just connect to it.
+
+```bash
+claude mcp add fleet-rlm --transport http https://<sandbox-url>/mcp
+```
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPENROUTER_API_KEY` | (required) | OpenRouter API key |
-| `RLM_MODEL` | `openrouter/x-ai/grok-code-fast-1` | Root execution model |
-| `RLM_SUBTASK_MODEL` | `openrouter/openai/gpt-4o-mini` | Subtask model |
-| `RLM_MAX_DEPTH` | `2` | Max recursion depth |
-| `RLM_MAX_ITERATIONS` | `20` | Max iterations per task |
-| `RLM_LOG_DIR` | `~/.rlm/logs` | Directory for execution logs |
-| `RLM_LIB_PATH` | `$HOME/rlm` | Path to RLM library (if not pip installed) |
+| `DAYTONA_API_KEY` | (required) | Daytona API key |
+| `OPENAI_API_KEY` | (required*) | OpenAI API key |
+| `ANTHROPIC_API_KEY` | (optional) | Anthropic API key |
+| `RLM_MODEL` | `openai/gpt-4o` | Root LLM for the RLM loop |
+| `RLM_SUBTASK_MODEL` | `openai/gpt-4o-mini` | Model for subtasks |
+| `RLM_MAX_ITERATIONS` | `15` | Max iterations per RLM loop |
+| `DAYTONA_API_URL` | `https://app.daytona.io/api` | Daytona API endpoint |
+| `DAYTONA_TARGET` | `us` | Daytona region (us, eu, asia) |
+| `MCP_TRANSPORT` | `stdio` | `stdio`, `streamable-http`, or `sse` |
+| `MCP_PORT` | `8000` | HTTP port (when using streamable-http) |
 
-## Usage with mcporter
+*One of OPENAI_API_KEY or ANTHROPIC_API_KEY is required.
 
-```bash
-# Install mcporter
-npm install -g mcporter
+## Architecture
 
-# Check server is available
-mcporter list | grep rlm
+### DaytonaInterpreter (`src/daytona_interpreter.py`)
 
-# Execute a calculation
-mcporter call 'rlm.rlm_execute(task: "calculate the first 20 prime numbers")'
+Drop-in replacement for Fleet RLM's `ModalInterpreter`. Manages the Daytona sandbox lifecycle:
 
-# Analyze data
-mcporter call 'rlm.rlm_analyze(data: "[1,2,3,4,5]", question: "what is the mean?")'
+- `start()` — creates a Daytona sandbox with Python environment
+- `execute(code, variables, timeout)` — runs Python code in sandbox
+- `execute_stateful(code)` — stateful execution (variables persist between calls)
+- `upload_file()` / `download_file()` / `list_files()` — file operations
+- `get_history()` — returns full execution trajectory
+- `shutdown()` — deletes the sandbox
 
-# Check status
-mcporter call 'rlm.rlm_status()'
+### RLM Loop (`src/server.py::rlm_loop`)
+
+The core iterative loop:
+
+1. Build system prompt with task + context
+2. Ask LLM to write Python code
+3. Execute code in Daytona sandbox via `DaytonaInterpreter`
+4. Append code + output to conversation history
+5. If `SUBMIT()` called → return answer
+6. Otherwise → go to step 2
+7. After max iterations → fallback extraction
+
+### SUBMIT Protocol
+
+Inside the sandbox, code can call `SUBMIT(answer=...)` to signal completion:
+
+```python
+# This runs in the Daytona sandbox
+result = some_computation()
+SUBMIT(answer=result)
 ```
 
-## Security Notice
+## Three Ways to Run
 
-RLM executes arbitrary Python code by design. Only use with trusted inputs. The code runs in a local Python environment without additional sandboxing.
+| Mode | Command | Transport | Use case |
+|------|---------|-----------|----------|
+| Local stdio | `./run_server.sh` | stdio | Claude Desktop, local CLI |
+| Local HTTP | `./run_server.sh --http` | streamable-http | Remote clients on same network |
+| Daytona deploy | `./run_server.sh --deploy` | streamable-http | Always-on, connect from anywhere |
 
 ## Acknowledgments
 
-This MCP server is a wrapper for the **Recursive Language Models (RLM)** library developed by:
-
-- **Alex L. Zhang** (MIT CSAIL)
-- **Tim Kraska** (MIT CSAIL)
-- **Omar Khattab** (MIT CSAIL)
-
-The RLM concept and implementation are their original work. This repository only provides an MCP interface to make RLM accessible via the Model Context Protocol.
-
-**Citation:**
-```bibtex
-@article{zhang2025rlm,
-  title={Recursive Language Models},
-  author={Zhang, Alex L. and Kraska, Tim and Khattab, Omar},
-  journal={arXiv preprint arXiv:2512.24601},
-  year={2025}
-}
-```
-
-## References
-
-- **Paper:** [Recursive Language Models](https://arxiv.org/abs/2512.24601) (Zhang, Kraska, Khattab 2025)
-- **RLM Library:** [github.com/alexzhang13/rlm](https://github.com/alexzhang13/rlm)
-- **MCP SDK:** [modelcontextprotocol.io](https://modelcontextprotocol.io)
-- **mcporter:** [mcporter.dev](http://mcporter.dev)
+- **RLM concept:** Alex L. Zhang, Tim Kraska, Omar Khattab (MIT CSAIL) — [paper](https://arxiv.org/abs/2512.24601)
+- **Fleet RLM:** [Qredence](https://github.com/Qredence/fleet-rlm) — patterns and architecture
+- **Daytona:** [daytona.io](https://www.daytona.io) — sandbox infrastructure
+- **MCP:** [modelcontextprotocol.io](https://modelcontextprotocol.io)
 
 ## License
 
-MIT License - see [LICENSE](LICENSE)
+MIT License — see [LICENSE](LICENSE)
