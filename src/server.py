@@ -5,43 +5,48 @@ Fleet RLM MCP Server — Daytona Edition
 Provides RLM (Recursive Language Model) capabilities backed by
 Daytona sandboxes for secure, remote Python code execution.
 
-The LLM writes code → Daytona executes it in an isolated sandbox →
-output returns to the LLM → iterate until SUBMIT().
+    LLM writes code  →  Daytona executes it  →  output fed back  →  iterate until SUBMIT()
 
 Usage:
-    export DAYTONA_API_KEY=your_daytona_key
-    export OPENAI_API_KEY=your_key        # or ANTHROPIC_API_KEY
-    python -m src.server
+    export DAYTONA_API_KEY=…
+    export OPENAI_API_KEY=…        # or ANTHROPIC_API_KEY
+    python -m src
 """
 
-import os
+import atexit
 import json
-import time
 import logging
-from typing import Optional
+import os
+import re
+import signal
+import sys
+import time
 from pathlib import Path
+from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
 # ---------------------------------------------------------------------------
-# Load .env.local
+# Load .env.local  (first one found wins; values never overwrite existing env)
 # ---------------------------------------------------------------------------
-for env_path in [
+for _env_path in (
     Path(__file__).parent.parent / ".env.local",
     Path(__file__).parent.parent.parent / ".env.local",
-]:
-    if env_path.exists():
-        with open(env_path, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, value = line.split("=", 1)
-                    value = value.strip("\"'")
-                    os.environ.setdefault(key, value)
+):
+    if _env_path.exists():
+        with open(_env_path) as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if _line and not _line.startswith("#") and "=" in _line:
+                    _k, _v = _line.split("=", 1)
+                    os.environ.setdefault(_k.strip(), _v.strip().strip("\"'"))
         break
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(name)s %(levelname)s  %(message)s",
+)
+logger = logging.getLogger("fleet-rlm")
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -54,7 +59,6 @@ DAYTONA_API_KEY = os.getenv("DAYTONA_API_KEY", "")
 DAYTONA_API_URL = os.getenv("DAYTONA_API_URL", "https://app.daytona.io/api")
 DAYTONA_TARGET = os.getenv("DAYTONA_TARGET", "us")
 RLM_MAX_ITERATIONS = int(os.getenv("RLM_MAX_ITERATIONS", "15"))
-RLM_MAX_OUTPUT_CHARS = int(os.getenv("RLM_MAX_OUTPUT_CHARS", "10000"))
 MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "stdio")  # "stdio" | "streamable-http" | "sse"
 MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
 
@@ -64,13 +68,13 @@ MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
 mcp = FastMCP("fleet-rlm-daytona", host="0.0.0.0", port=MCP_PORT)
 
 # ---------------------------------------------------------------------------
-# Interpreter lifecycle — shared per server process
+# Interpreter lifecycle
 # ---------------------------------------------------------------------------
 _interpreter = None
 
 
 def get_interpreter():
-    """Lazy-create a DaytonaInterpreter that lives for the server's lifetime."""
+    """Lazy-create a DaytonaInterpreter that lives for the process lifetime."""
     global _interpreter
     if _interpreter is None:
         from .daytona_interpreter import DaytonaInterpreter
@@ -83,8 +87,18 @@ def get_interpreter():
             auto_stop_interval=30,
         )
         _interpreter.start()
-        logger.info("Daytona sandbox ready")
+        logger.info("Daytona sandbox ready — id=%s", _interpreter._sandbox.id)
     return _interpreter
+
+
+def _shutdown_interpreter():
+    global _interpreter
+    if _interpreter is not None:
+        _interpreter.shutdown()
+        _interpreter = None
+
+
+atexit.register(_shutdown_interpreter)
 
 
 def _resolve_api_key(model: str) -> str:
@@ -95,106 +109,115 @@ def _resolve_api_key(model: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# RLM execution loop  (the core "write code → execute → iterate" loop)
+# RLM execution loop
 # ---------------------------------------------------------------------------
 
-def _llm_completion(prompt: str, model: str = None) -> str:
-    """Call an LLM via litellm."""
+def _llm_completion(messages: list[dict], model: str = None) -> str:
+    """Call an LLM via litellm (chat-style)."""
     import litellm
 
     model = model or RLM_MODEL
     api_key = _resolve_api_key(model)
 
-    response = litellm.completion(
+    resp = litellm.completion(
         model=model,
-        messages=[{"role": "user", "content": prompt}],
+        messages=messages,
         api_key=api_key,
         max_tokens=4096,
     )
-    return response.choices[0].message.content
+    return resp.choices[0].message.content
+
+
+_CODE_FENCE_RE = re.compile(r"```(?:python)?\s*\n(.*?)```", re.DOTALL)
+_CODE_STARTERS = (
+    "import ", "from ", "def ", "class ", "for ", "while ", "if ",
+    "print(", "x ", "y ", "result", "#", "SUBMIT",
+)
 
 
 def _extract_code_block(text: str) -> Optional[str]:
-    """Extract the first ```python ... ``` block, or the whole text if no block."""
-    import re
-
-    # Try fenced code block first
-    match = re.search(r"```(?:python)?\s*\n(.*?)```", text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-
-    # If the entire response looks like code (starts with import/def/for/etc.)
-    lines = text.strip().split("\n")
-    code_starters = ("import ", "from ", "def ", "class ", "for ", "while ", "if ",
-                     "print(", "x ", "y ", "result", "#")
-    if lines and any(lines[0].strip().startswith(s) for s in code_starters):
+    """Extract the first fenced code block, or the whole text if it looks like code."""
+    m = _CODE_FENCE_RE.search(text)
+    if m:
+        return m.group(1).strip()
+    first = text.strip().split("\n", 1)[0].strip()
+    if any(first.startswith(s) for s in _CODE_STARTERS):
         return text.strip()
+    return None
 
+
+def _is_submit_result(output: str) -> Optional[str]:
+    """If *output* contains a SUBMIT payload, return the answer string."""
+    stripped = output.strip()
+    # The SUBMIT helper prints  __SUBMIT__:{json}
+    # The interpreter already decodes it into pretty JSON.
+    # Case 1: raw JSON object with "answer" key
+    if stripped.startswith("{") and '"answer"' in stripped:
+        try:
+            return json.loads(stripped).get("answer", stripped)
+        except (json.JSONDecodeError, AttributeError):
+            pass
+    # Case 2: still has the marker (shouldn't normally reach here)
+    for line in reversed(stripped.splitlines()):
+        if line.startswith("__SUBMIT__:"):
+            payload = line[len("__SUBMIT__:"):]
+            try:
+                return json.loads(payload).get("answer", payload)
+            except (json.JSONDecodeError, AttributeError):
+                return payload
     return None
 
 
 def rlm_loop(
     task: str,
     context: str = "",
-    max_iterations: int = None,
-    model: str = None,
+    max_iterations: Optional[int] = None,
+    model: Optional[str] = None,
 ) -> dict:
-    """Run the RLM iterative code-execution loop.
+    """Core RLM iterative code-execution loop.
 
-    1. LLM reads the task + history and writes Python code
-    2. Code executes in Daytona sandbox
-    3. Output returns to LLM
-    4. Repeat until SUBMIT() or max_iterations
-
-    Returns dict with keys: answer, trajectory, execution_time
+    Returns ``{"answer": str, "trajectory": list, "execution_time": float}``.
     """
     max_iter = max_iterations or RLM_MAX_ITERATIONS
     model = model or RLM_MODEL
     interp = get_interpreter()
-    trajectory = []
-    start_time = time.time()
+    trajectory: list[dict] = []
+    start = time.time()
 
-    system_prompt = f"""You are an RLM (Recursive Language Model) agent.
-You solve tasks by writing and executing Python code in a sandbox.
+    system_msg = (
+        "You are an RLM (Recursive Language Model) agent.\n"
+        "You solve tasks by writing and executing Python code in a Daytona sandbox.\n\n"
+        "RULES:\n"
+        "- Write Python code to explore data, compute results, test hypotheses.\n"
+        "- After each execution you see stdout/stderr.  Use it to decide your next step.\n"
+        "- When you have the final answer, call  SUBMIT(answer=<your answer>)  in your code.\n"
+        "- Available packages: numpy, pandas, requests, plus the stdlib.\n"
+        "- Keep code concise.  Print intermediate results so you can inspect them.\n"
+        "- Do NOT just describe what you would do — write executable code.\n"
+    )
 
-RULES:
-- Write Python code to explore data, compute results, test hypotheses.
-- After each execution you see stdout. Use it to decide your next step.
-- When you have the final answer, call SUBMIT(answer=<your answer>) in your code.
-- You have access to: numpy, pandas, requests, re, json, math, collections.
-- Keep code concise. Print intermediate results so you can inspect them.
-- Do NOT just describe what you would do — actually write executable code.
-
-TASK: {task}
-"""
+    messages: list[dict] = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": f"TASK: {task}"},
+    ]
     if context:
-        system_prompt += f"\nCONTEXT (available as the variable `context`):\n{context}\n"
-
-    conversation = [system_prompt]
+        messages.append(
+            {"role": "user", "content": f"CONTEXT (available as variable `context`):\n{context}"}
+        )
 
     for iteration in range(max_iter):
-        # Build the prompt with history
-        history_text = "\n".join(conversation)
         if iteration == 0:
-            history_text += "\n\nWrite your first piece of Python code to start solving this task:"
+            messages.append({"role": "user", "content": "Write your first Python code to start solving this task:"})
         else:
-            history_text += "\n\nBased on the output above, write your next piece of Python code (or call SUBMIT if done):"
+            messages.append({"role": "user", "content": "Based on the output above, write your next Python code (or call SUBMIT if done):"})
 
-        # Ask LLM to write code
-        llm_response = _llm_completion(history_text, model=model)
+        llm_response = _llm_completion(messages, model=model)
+        messages.append({"role": "assistant", "content": llm_response})
+
         code = _extract_code_block(llm_response)
-
         if code is None:
-            # LLM didn't produce code — maybe it has the answer in prose
-            trajectory.append({
-                "iteration": iteration + 1,
-                "llm_response": llm_response,
-                "code": None,
-                "output": None,
-            })
-            # Try one more time asking explicitly for code
-            conversation.append(f"\n[LLM Response (no code)]:\n{llm_response}")
-            conversation.append("\nPlease write executable Python code. Use SUBMIT(answer=...) when done.")
+            trajectory.append({"iteration": iteration + 1, "llm_response": llm_response, "code": None, "output": None})
+            messages.append({"role": "user", "content": "Please write executable Python code.  Use SUBMIT(answer=…) when done."})
             continue
 
         # Execute in Daytona
@@ -204,46 +227,19 @@ TASK: {task}
 
         output = interp.execute(code, variables=variables, timeout=60)
 
-        trajectory.append({
-            "iteration": iteration + 1,
-            "code": code,
-            "output": output,
-        })
+        trajectory.append({"iteration": iteration + 1, "code": code, "output": output})
+        messages.append({"role": "user", "content": f"[Execution output]:\n{output}"})
 
-        conversation.append(f"\n[Code (iteration {iteration + 1})]:\n```python\n{code}\n```")
-        conversation.append(f"\n[Output]:\n{output}")
+        # Check for SUBMIT
+        answer = _is_submit_result(output)
+        if answer is not None:
+            return {"answer": answer, "trajectory": trajectory, "execution_time": time.time() - start}
 
-        # Check if SUBMIT was called (output starts with JSON from __SUBMIT__)
-        if output.strip().startswith("{") and '"answer"' in output:
-            try:
-                result = json.loads(output.strip())
-                return {
-                    "answer": result.get("answer", output),
-                    "trajectory": trajectory,
-                    "execution_time": time.time() - start_time,
-                }
-            except json.JSONDecodeError:
-                pass
+    # Fallback — ask LLM to summarize
+    messages.append({"role": "user", "content": "You've run out of iterations.  Based on everything above, provide your best final answer in plain text.  Do NOT write code."})
+    answer = _llm_completion(messages, model=model)
 
-        # Also check for the __SUBMIT__ marker that got JSON-decoded already
-        if "__SUBMIT__:" not in output and "SUBMIT" in code and output.strip():
-            # SUBMIT was in code and we got clean output — probably the answer
-            return {
-                "answer": output.strip(),
-                "trajectory": trajectory,
-                "execution_time": time.time() - start_time,
-            }
-
-    # Fallback: ask LLM to extract answer from history
-    fallback_prompt = "\n".join(conversation)
-    fallback_prompt += "\n\nYou've run out of iterations. Based on everything above, provide your best final answer in plain text. Do NOT write code."
-    answer = _llm_completion(fallback_prompt, model=model)
-
-    return {
-        "answer": answer,
-        "trajectory": trajectory,
-        "execution_time": time.time() - start_time,
-    }
+    return {"answer": answer, "trajectory": trajectory, "execution_time": time.time() - start}
 
 
 # ---------------------------------------------------------------------------
@@ -255,174 +251,127 @@ def rlm_execute(task: str, context: str = "") -> str:
     """Execute a task using the RLM code-execution loop.
 
     The LLM writes Python code, executes it in a secure Daytona sandbox,
-    inspects output, iterates, and returns a verified answer.
+    reads the output, iterates, and returns a verified answer.
 
     Args:
-        task: The task to accomplish (e.g. "Calculate compound interest for 5 years")
-        context: Optional context/data to work with
-
-    Returns:
-        RLM's final answer after iterative code execution
+        task: The task to accomplish (e.g. "Calculate the 50th Fibonacci number")
+        context: Optional data or context to make available to the code
     """
     result = rlm_loop(task=task, context=context)
 
-    trajectory_summary = ""
+    trace = ""
     for step in result["trajectory"]:
         if step.get("code"):
-            trajectory_summary += f"\n**Iteration {step['iteration']}:**\n```python\n{step['code'][:500]}\n```\n"
+            trace += f"\n**Iteration {step['iteration']}:**\n```python\n{step['code'][:500]}\n```\n"
             if step.get("output"):
-                out = step["output"][:300]
-                trajectory_summary += f"Output: `{out}`\n"
+                trace += f"Output: `{step['output'][:300]}`\n"
 
-    return f"""## RLM Execution Result
-
-**Task:** {task}
-**Model:** {RLM_MODEL}
-**Execution Time:** {result['execution_time']:.2f}s
-**Sandbox:** Daytona
-
-### Answer
-
-{result['answer']}
-
-### Execution Trace
-{trajectory_summary}
-"""
+    return (
+        f"## RLM Result\n\n"
+        f"**Task:** {task}\n"
+        f"**Model:** {RLM_MODEL}\n"
+        f"**Time:** {result['execution_time']:.1f}s\n\n"
+        f"### Answer\n\n{result['answer']}\n\n"
+        f"### Trace\n{trace}"
+    )
 
 
 @mcp.tool()
 def rlm_analyze(data: str, question: str) -> str:
-    """Analyze data using the RLM code-execution loop.
-
-    Provide data (text, JSON, CSV, numbers) and a question.
-    RLM writes and executes Python code to analyze it.
+    """Analyze data by writing and executing Python code.
 
     Args:
-        data: The data to analyze
+        data: The data to analyze (text, JSON, CSV, numbers)
         question: What to find out about the data
-
-    Returns:
-        Analysis results from code execution
     """
-    task = f"Analyze the following data and answer: {question}"
-    result = rlm_loop(task=task, context=data)
-
-    return f"""## RLM Data Analysis
-
-**Question:** {question}
-
-### Findings
-
-{result['answer']}
-
----
-**Execution Time:** {result['execution_time']:.2f}s
-**Iterations:** {len(result['trajectory'])}
-"""
+    result = rlm_loop(task=f"Analyze the following data and answer: {question}", context=data)
+    return (
+        f"## Analysis\n\n**Question:** {question}\n\n"
+        f"### Findings\n\n{result['answer']}\n\n"
+        f"---\n*{result['execution_time']:.1f}s · {len(result['trajectory'])} iterations*"
+    )
 
 
 @mcp.tool()
 def rlm_code(description: str, language: str = "python") -> str:
-    """Generate and test code using the RLM loop.
-
-    RLM writes code, executes it to verify it works,
-    fixes bugs, and returns working code.
+    """Generate, test, and return working code via the RLM loop.
 
     Args:
         description: What the code should do
-        language: Programming language (default: python)
-
-    Returns:
-        Working, tested code
+        language: Target language (default: python)
     """
-    task = f"Write {language} code that: {description}. Test it with example inputs, fix bugs, and return the final working code."
+    task = f"Write {language} code that: {description}. Test it, fix any bugs, and SUBMIT the final working version."
     result = rlm_loop(task=task)
-
-    return f"""## RLM Code Generation
-
-**Description:** {description}
-**Language:** {language}
-
-### Generated Code
-
-{result['answer']}
-
----
-**Execution Time:** {result['execution_time']:.2f}s
-"""
+    return (
+        f"## Generated Code\n\n**Description:** {description}\n\n"
+        f"{result['answer']}\n\n"
+        f"---\n*{result['execution_time']:.1f}s*"
+    )
 
 
 @mcp.tool()
 def rlm_decompose(complex_task: str, num_subtasks: int = 5) -> str:
-    """Decompose a complex task into subtasks and solve each.
-
-    RLM breaks down the task, solves each part with code execution,
-    then synthesizes results.
+    """Break a complex task into subtasks, solve each with code, synthesize.
 
     Args:
-        complex_task: A complex task to break down
+        complex_task: A complex task to break down and solve
         num_subtasks: Approximate number of subtasks (default: 5)
-
-    Returns:
-        Solution with subtask breakdown
     """
-    task = f"""Break this task into ~{num_subtasks} subtasks and solve each one:
-
-{complex_task}
-
-For each subtask:
-1. Describe it
-2. Write and execute code to solve it
-3. After all subtasks are done, call SUBMIT(answer=<synthesized result>)
-"""
+    task = (
+        f"Break this task into ~{num_subtasks} subtasks and solve each one:\n\n"
+        f"{complex_task}\n\n"
+        "For each subtask: describe it, write and execute code, then call "
+        "SUBMIT(answer=<synthesized result>) when all subtasks are done."
+    )
     result = rlm_loop(task=task, max_iterations=RLM_MAX_ITERATIONS + 5)
-
-    return f"""## RLM Task Decomposition
-
-**Task:** {complex_task}
-
-### Solution
-
-{result['answer']}
-
----
-**Execution Time:** {result['execution_time']:.2f}s
-**Iterations:** {len(result['trajectory'])}
-"""
+    return (
+        f"## Decomposed Solution\n\n**Task:** {complex_task}\n\n"
+        f"### Solution\n\n{result['answer']}\n\n"
+        f"---\n*{result['execution_time']:.1f}s · {len(result['trajectory'])} iterations*"
+    )
 
 
 @mcp.tool()
 def sandbox_exec(code: str) -> str:
-    """Execute Python code directly in the Daytona sandbox.
-
-    Low-level tool — runs code without the RLM loop.
-    Useful for quick computations or file operations.
+    """Execute Python code directly in the Daytona sandbox (no RLM loop).
 
     Args:
         code: Python code to execute
-
-    Returns:
-        Stdout from the execution
     """
-    interp = get_interpreter()
-    output = interp.execute(code, timeout=60)
-    return output
+    return get_interpreter().execute(code, timeout=60)
+
+
+@mcp.tool()
+def sandbox_exec_stateful(code: str) -> str:
+    """Execute Python in a stateful REPL — variables persist between calls.
+
+    Args:
+        code: Python code to execute
+    """
+    return get_interpreter().execute_stateful(code, timeout=60)
 
 
 @mcp.tool()
 def sandbox_upload(content: str, path: str) -> str:
-    """Upload a file to the Daytona sandbox.
+    """Upload a text file into the Daytona sandbox.
 
     Args:
         content: File content (text)
-        path: Destination path in sandbox (e.g. /home/daytona/data.csv)
-
-    Returns:
-        Confirmation message
+        path: Destination path in the sandbox (e.g. /home/daytona/data.csv)
     """
-    interp = get_interpreter()
-    interp.upload_file(content.encode("utf-8"), path)
-    return f"Uploaded {len(content)} bytes to {path}"
+    get_interpreter().upload_file(content.encode("utf-8"), path)
+    return f"Uploaded {len(content)} bytes → {path}"
+
+
+@mcp.tool()
+def sandbox_download(path: str) -> str:
+    """Download a text file from the Daytona sandbox.
+
+    Args:
+        path: File path in the sandbox to download
+    """
+    data = get_interpreter().download_file(path)
+    return data.decode("utf-8", errors="replace")
 
 
 @mcp.tool()
@@ -431,53 +380,48 @@ def sandbox_files(path: str = "/home/daytona") -> str:
 
     Args:
         path: Directory to list (default: /home/daytona)
-
-    Returns:
-        File listing
     """
-    interp = get_interpreter()
-    files = interp.list_files(path)
+    files = get_interpreter().list_files(path)
     if not files:
         return f"No files in {path}"
-    lines = []
-    for f in files:
-        kind = "dir" if f["is_dir"] else "file"
-        lines.append(f"  {kind}  {f['size']:>8}  {f['name']}")
+    lines = [
+        f"  {'dir' if f['is_dir'] else 'file'}  {f['size']:>8}  {f['name']}"
+        for f in files
+    ]
     return f"Files in {path}:\n" + "\n".join(lines)
+
+
+@mcp.tool()
+def sandbox_shell(command: str) -> str:
+    """Run a shell command in the Daytona sandbox.
+
+    Args:
+        command: Shell command to execute (e.g. "ls -la", "pip install scipy")
+    """
+    return get_interpreter()._exec_shell(command, timeout=60)
 
 
 @mcp.tool()
 def rlm_status() -> str:
     """Get Fleet RLM + Daytona system status and configuration."""
     interp = _interpreter
-    sandbox_status = "Running" if (interp and interp._started) else "Not started"
-    sandbox_id = interp._sandbox.id if (interp and interp._sandbox) else "N/A"
+    running = interp is not None and interp._started
+    sandbox_id = interp._sandbox.id if running else "N/A"
 
-    return f"""## Fleet RLM + Daytona Status
+    keys = {
+        "OpenAI": bool(OPENAI_API_KEY),
+        "Anthropic": bool(ANTHROPIC_API_KEY),
+        "Daytona": bool(DAYTONA_API_KEY),
+    }
 
-**Root Model:** {RLM_MODEL}
-**Subtask Model:** {RLM_SUBTASK_MODEL}
-**Max Iterations:** {RLM_MAX_ITERATIONS}
-
-**Sandbox:**
-- Provider: Daytona
-- Status: {sandbox_status}
-- ID: {sandbox_id}
-- Target: {DAYTONA_TARGET}
-
-**Capabilities:**
-- Iterative code execution (RLM loop)
-- Secure sandbox (Daytona)
-- File upload/download
-- Data analysis
-- Code generation & testing
-- Task decomposition
-
-**API Keys:**
-- OpenAI: {"Set" if OPENAI_API_KEY else "NOT SET"}
-- Anthropic: {"Set" if ANTHROPIC_API_KEY else "NOT SET"}
-- Daytona: {"Set" if DAYTONA_API_KEY else "NOT SET"}
-"""
+    return (
+        f"## Fleet RLM + Daytona Status\n\n"
+        f"**Model:** {RLM_MODEL}  |  **Subtask:** {RLM_SUBTASK_MODEL}\n"
+        f"**Max iterations:** {RLM_MAX_ITERATIONS}\n\n"
+        f"**Sandbox:** {'Running' if running else 'Not started'}  "
+        f"(id: {sandbox_id}, target: {DAYTONA_TARGET})\n\n"
+        f"**API keys:** " + ", ".join(f"{k}: {'set' if v else 'NOT SET'}" for k, v in keys.items())
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -485,12 +429,21 @@ def rlm_status() -> str:
 # ---------------------------------------------------------------------------
 
 def main():
-    """Run the Fleet RLM MCP server."""
-    logger.info("Starting Fleet RLM MCP Server (Daytona Edition)...")
-    logger.info(f"Root Model: {RLM_MODEL}")
-    logger.info(f"Subtask Model: {RLM_SUBTASK_MODEL}")
-    logger.info(f"Daytona Target: {DAYTONA_TARGET}")
-    logger.info(f"Transport: {MCP_TRANSPORT} (port {MCP_PORT})")
+    """Start the Fleet RLM MCP server."""
+    logger.info("Fleet RLM MCP Server (Daytona Edition)")
+    logger.info("  model=%s  subtask=%s  target=%s", RLM_MODEL, RLM_SUBTASK_MODEL, DAYTONA_TARGET)
+    logger.info("  transport=%s  port=%d", MCP_TRANSPORT, MCP_PORT)
+
+    # Graceful shutdown on SIGTERM — interpreter cleanup via atexit
+    def _handle_signal(sig, _frame):
+        logger.info("Received signal %s — shutting down", sig)
+        # Restore default handler to avoid double-signal issues
+        signal.signal(sig, signal.SIG_DFL)
+        _shutdown_interpreter()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+
     mcp.run(transport=MCP_TRANSPORT)
 
 
