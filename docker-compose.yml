@@ -1,0 +1,20 @@
+services:
+  fleet-rlm:
+    build: .
+    ports:
+      - "${MCP_PORT:-8000}:8000"
+    environment:
+      - DAYTONA_API_KEY
+      - OPENAI_API_KEY
+      - ANTHROPIC_API_KEY
+      - RLM_MODEL
+      - RLM_SUBTASK_MODEL
+      - RLM_MAX_ITERATIONS
+      - DAYTONA_TARGET
+      - DAYTONA_API_URL
+      - MCP_TRANSPORT=streamable-http
+      - MCP_PORT=8000
+    env_file:
+      - path: .env.local
+        required: false
+    restart: unless-stopped

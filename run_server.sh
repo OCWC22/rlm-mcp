@@ -4,6 +4,7 @@
 # Usage:
 #   ./run_server.sh              # local stdio (for Claude Desktop / CLI)
 #   ./run_server.sh --http       # HTTP on port 8000 (for remote access)
+#   ./run_server.sh --docker     # build & run in Docker (always-on)
 #   ./run_server.sh --deploy     # deploy to Daytona workspace
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -42,6 +43,13 @@ case "${1:-}" in
         export MCP_PORT="${MCP_PORT:-8000}"
         echo "Starting Fleet RLM MCP on http://0.0.0.0:${MCP_PORT}/mcp" >&2
         exec "$VENV_PYTHON" -m src
+        ;;
+    --docker)
+        echo "Building & starting Docker container..." >&2
+        docker compose -f "$SCRIPT_DIR/docker-compose.yml" up --build -d
+        echo "Fleet RLM MCP running at http://localhost:${MCP_PORT:-8000}/mcp" >&2
+        echo "Logs: docker compose logs -f fleet-rlm" >&2
+        exit 0
         ;;
     --deploy)
         echo "Deploying to Daytona..." >&2
