@@ -9,6 +9,7 @@ services:
       - DAYTONA_TARGET
       - OPENAI_API_KEY
       - ANTHROPIC_API_KEY
+      - ZAI_API_KEY
       - RLM_MODEL
       - RLM_SUBTASK_MODEL
       - RLM_MAX_ITERATIONS
