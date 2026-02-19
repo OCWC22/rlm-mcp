@@ -371,6 +371,8 @@ def sandbox_download(path: str) -> str:
         path: File path in the sandbox to download
     """
     data = get_interpreter().download_file(path)
+    if data is None:
+        return f"[ERROR] File not found: {path}"
     return data.decode("utf-8", errors="replace")
 
 
