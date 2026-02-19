@@ -15,8 +15,11 @@ Based on the [Fleet RLM](https://github.com/Qredence/fleet-rlm) patterns by Qred
 | `rlm_code` | Generate, test, and fix code |
 | `rlm_decompose` | Break complex tasks into subtasks and solve each |
 | `sandbox_exec` | Execute Python code directly in sandbox (no RLM loop) |
+| `sandbox_exec_stateful` | Stateful REPL — variables persist between calls |
 | `sandbox_upload` | Upload files to the sandbox |
+| `sandbox_download` | Download files from the sandbox |
 | `sandbox_files` | List files in the sandbox |
+| `sandbox_shell` | Run shell commands in the sandbox |
 | `rlm_status` | Check system status |
 
 ## How It Works
@@ -92,7 +95,23 @@ Connect from Claude CLI:
 claude mcp add fleet-rlm --transport http http://your-ip:8000/mcp
 ```
 
-### Option C: Deploy to Daytona (always-on, connect from anywhere)
+### Option C: Docker (always-on, production)
+
+```bash
+# With .env.local
+./run_server.sh --docker
+
+# Or directly
+docker compose up --build -d
+```
+
+Server starts on `http://localhost:8000/mcp` with a health check.
+
+```bash
+claude mcp add fleet-rlm --transport http http://localhost:8000/mcp
+```
+
+### Option D: Deploy to Daytona (always-on, connect from anywhere)
 
 ```bash
 ./run_server.sh --deploy
@@ -162,6 +181,7 @@ SUBMIT(answer=result)
 |------|---------|-----------|----------|
 | Local stdio | `./run_server.sh` | stdio | Claude Desktop, local CLI |
 | Local HTTP | `./run_server.sh --http` | streamable-http | Remote clients on same network |
+| Docker | `./run_server.sh --docker` | streamable-http | Production, always-on |
 | Daytona deploy | `./run_server.sh --deploy` | streamable-http | Always-on, connect from anywhere |
 
 ## Acknowledgments
